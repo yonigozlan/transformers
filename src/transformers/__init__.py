@@ -467,10 +467,6 @@ _import_structure = {
         "GroundingDinoConfig",
         "GroundingDinoProcessor",
     ],
-    "models.omdet_turbo": [
-        "OmDetTurboConfig",
-        "OmDetTurboProcessor",
-    ],
     "models.groupvit": [
         "GroupViTConfig",
         "GroupViTTextConfig",
@@ -608,6 +604,10 @@ _import_structure = {
     "models.nystromformer": ["NystromformerConfig"],
     "models.olmo": ["OlmoConfig"],
     "models.olmoe": ["OlmoeConfig"],
+    "models.omdet_turbo": [
+        "OmDetTurboConfig",
+        "OmDetTurboProcessor",
+    ],
     "models.oneformer": [
         "OneFormerConfig",
         "OneFormerProcessor",
@@ -1178,7 +1178,6 @@ else:
     _import_structure["models.fuyu"].extend(["FuyuImageProcessor", "FuyuProcessor"])
     _import_structure["models.glpn"].extend(["GLPNFeatureExtractor", "GLPNImageProcessor"])
     _import_structure["models.grounding_dino"].extend(["GroundingDinoImageProcessor"])
-    _import_structure["models.omdet_turbo"].extend(["OmDetTurboImageProcessor"])
     _import_structure["models.idefics"].extend(["IdeficsImageProcessor"])
     _import_structure["models.idefics2"].extend(["Idefics2ImageProcessor"])
     _import_structure["models.imagegpt"].extend(["ImageGPTFeatureExtractor", "ImageGPTImageProcessor"])
@@ -1194,6 +1193,7 @@ else:
     _import_structure["models.mobilenet_v2"].extend(["MobileNetV2FeatureExtractor", "MobileNetV2ImageProcessor"])
     _import_structure["models.mobilevit"].extend(["MobileViTFeatureExtractor", "MobileViTImageProcessor"])
     _import_structure["models.nougat"].append("NougatImageProcessor")
+    _import_structure["models.omdet_turbo"].extend(["OmDetTurboImageProcessor"])
     _import_structure["models.oneformer"].extend(["OneFormerImageProcessor"])
     _import_structure["models.owlv2"].append("Owlv2ImageProcessor")
     _import_structure["models.owlvit"].extend(["OwlViTFeatureExtractor", "OwlViTImageProcessor"])
@@ -2348,13 +2348,6 @@ else:
             "GroundingDinoPreTrainedModel",
         ]
     )
-    _import_structure["models.omdet_turbo"].extend(
-        [
-            "OmDetTurboForObjectDetection",
-            "OmDetTurboModel",
-            "OmDetTurboPreTrainedModel",
-        ]
-    )
     _import_structure["models.groupvit"].extend(
         [
             "GroupViTModel",
@@ -2846,6 +2839,13 @@ else:
             "OlmoeForCausalLM",
             "OlmoeModel",
             "OlmoePreTrainedModel",
+        ]
+    )
+    _import_structure["models.omdet_turbo"].extend(
+        [
+            "OmDetTurboForObjectDetection",
+            "OmDetTurboModel",
+            "OmDetTurboPreTrainedModel",
         ]
     )
     _import_structure["models.oneformer"].extend(
@@ -5252,10 +5252,6 @@ if TYPE_CHECKING:
         GroundingDinoConfig,
         GroundingDinoProcessor,
     )
-    from .models.omdet_turbo import (
-        OmDetTurboConfig,
-        OmDetTurboProcessor,
-    )
     from .models.groupvit import (
         GroupViTConfig,
         GroupViTTextConfig,
@@ -5405,6 +5401,10 @@ if TYPE_CHECKING:
     )
     from .models.olmo import OlmoConfig
     from .models.olmoe import OlmoeConfig
+    from .models.omdet_turbo import (
+        OmDetTurboConfig,
+        OmDetTurboProcessor,
+    )
     from .models.oneformer import (
         OneFormerConfig,
         OneFormerProcessor,
@@ -5994,7 +5994,6 @@ if TYPE_CHECKING:
         from .models.fuyu import FuyuImageProcessor, FuyuProcessor
         from .models.glpn import GLPNFeatureExtractor, GLPNImageProcessor
         from .models.grounding_dino import GroundingDinoImageProcessor
-        from .models.omdet_turbo import OmDetTurboImageProcessor
         from .models.idefics import IdeficsImageProcessor
         from .models.idefics2 import Idefics2ImageProcessor
         from .models.imagegpt import ImageGPTFeatureExtractor, ImageGPTImageProcessor
@@ -6025,6 +6024,7 @@ if TYPE_CHECKING:
         )
         from .models.mobilevit import MobileViTFeatureExtractor, MobileViTImageProcessor
         from .models.nougat import NougatImageProcessor
+        from .models.omdet_turbo import OmDetTurboImageProcessor
         from .models.oneformer import OneFormerImageProcessor
         from .models.owlv2 import Owlv2ImageProcessor
         from .models.owlvit import OwlViTFeatureExtractor, OwlViTImageProcessor
@@ -6987,11 +6987,6 @@ if TYPE_CHECKING:
             GroundingDinoModel,
             GroundingDinoPreTrainedModel,
         )
-        from .models.omdet_turbo import (
-            OmDetTurboForObjectDetection,
-            OmDetTurboModel,
-            OmDetTurboPreTrainedModel,
-        )
         from .models.groupvit import (
             GroupViTModel,
             GroupViTPreTrainedModel,
@@ -7374,6 +7369,11 @@ if TYPE_CHECKING:
             OlmoeForCausalLM,
             OlmoeModel,
             OlmoePreTrainedModel,
+        )
+        from .models.omdet_turbo import (
+            OmDetTurboForObjectDetection,
+            OmDetTurboModel,
+            OmDetTurboPreTrainedModel,
         )
         from .models.oneformer import (
             OneFormerForUniversalSegmentation,
