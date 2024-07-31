@@ -2843,7 +2843,6 @@ else:
     _import_structure["models.omdet_turbo"].extend(
         [
             "OmDetTurboForObjectDetection",
-            "OmDetTurboModel",
             "OmDetTurboPreTrainedModel",
         ]
     )
@@ -7370,7 +7369,6 @@ if TYPE_CHECKING:
         )
         from .models.omdet_turbo import (
             OmDetTurboForObjectDetection,
-            OmDetTurboModel,
             OmDetTurboPreTrainedModel,
         )
         from .models.oneformer import (

@@ -180,7 +180,6 @@ MODEL_MAPPING_NAMES = OrderedDict(
         ("nystromformer", "NystromformerModel"),
         ("olmo", "OlmoModel"),
         ("olmoe", "OlmoeModel"),
-        ("omdet-turbo", "OmDetTurboModel"),
         ("oneformer", "OneFormerModel"),
         ("open-llama", "OpenLlamaModel"),
         ("openai-gpt", "OpenAIGPTModel"),
