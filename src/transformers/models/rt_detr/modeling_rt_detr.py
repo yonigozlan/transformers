@@ -18,7 +18,7 @@ import math
 import os
 import warnings
 from dataclasses import dataclass
-from functools import lru_cache, partial
+from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -605,7 +605,7 @@ class RTDetrEncoderLayer(nn.Module):
         self.normalize_before = config.normalize_before
 
         # self-attention
-        self.self_attn = RTDetrMultiheadAttention(
+        self.self_attn = RTDETR_ATTENTION_CLASSES[config._attn_implementation](
             embed_dim=config.encoder_hidden_dim,
             num_heads=config.num_attention_heads,
             dropout=config.dropout,
@@ -858,10 +858,10 @@ class RTDetrMultiscaleDeformableAttention(nn.Module):
 
         batch_size, num_queries, _ = hidden_states.shape
         batch_size, sequence_length, _ = encoder_hidden_states.shape
-        if (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() != sequence_length:
-            raise ValueError(
-                "Make sure to align the spatial shapes with the sequence length of the encoder hidden states"
-            )
+        # if (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() != sequence_length:
+        #     raise ValueError(
+        #         "Make sure to align the spatial shapes with the sequence length of the encoder hidden states"
+        #     )
 
         value = self.value_proj(encoder_hidden_states)
         if attention_mask is not None:
@@ -1032,11 +1032,77 @@ class RTDetrMultiheadAttention(nn.Module):
         return attn_output, attn_weights_reshaped
 
 
+class RTDetrMultiheadSdpaAttention(RTDetrMultiheadAttention):
+    is_causal = False
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_embeddings: Optional[torch.Tensor] = None,
+        output_attentions: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Input shape: Batch x Time x Channel"""
+
+        batch_size, target_len, embed_dim = hidden_states.size()
+        # add position embeddings to the hidden states before projecting to queries and keys
+        if position_embeddings is not None:
+            hidden_states_original = hidden_states
+            hidden_states = self.with_pos_embed(hidden_states, position_embeddings)
+
+        # get queries, keys and values
+        query_states = self.q_proj(hidden_states)
+        key_states = self._reshape(self.k_proj(hidden_states), -1, batch_size)
+        value_states = self._reshape(self.v_proj(hidden_states_original), -1, batch_size)
+
+        proj_shape = (batch_size * self.num_heads, -1, self.head_dim)
+        query_states = self._reshape(query_states, target_len, batch_size).view(*proj_shape)
+        key_states = key_states.view(*proj_shape)
+        value_states = value_states.view(*proj_shape)
+
+        # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
+        # Reference: https://github.com/pytorch/pytorch/issues/112577.
+        if query_states.device.type == "cuda" and attention_mask is not None:
+            query_states = query_states.contiguous()
+            key_states = key_states.contiguous()
+            value_states = value_states.contiguous()
+
+        # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
+        # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
+        is_causal = True if self.is_causal and target_len > 1 else False
+
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            attn_mask=attention_mask,
+            dropout_p=self.dropout if self.training else 0.0,
+            is_causal=is_causal,
+        )
+
+        if attn_output.size() != (batch_size * self.num_heads, target_len, self.head_dim):
+            raise ValueError(
+                f"`attn_output` should be of size {(batch_size, self.num_heads, target_len, self.head_dim)}, but is"
+                f" {attn_output.size()}"
+            )
+
+        attn_output = attn_output.view(batch_size, self.num_heads, target_len, self.head_dim)
+        attn_output = attn_output.transpose(1, 2)
+        attn_output = attn_output.reshape(batch_size, target_len, embed_dim)
+
+        attn_output = self.out_proj(attn_output)
+
+        return attn_output, None
+
+
+RTDETR_ATTENTION_CLASSES = {"eager": RTDetrMultiheadAttention, "sdpa": RTDetrMultiheadSdpaAttention}
+
+
 class RTDetrDecoderLayer(nn.Module):
     def __init__(self, config: RTDetrConfig):
         super().__init__()
         # self-attention
-        self.self_attn = RTDetrMultiheadAttention(
+        self.self_attn = RTDETR_ATTENTION_CLASSES[config._attn_implementation](
             embed_dim=config.d_model,
             num_heads=config.decoder_attention_heads,
             dropout=config.attention_dropout,
@@ -1145,6 +1211,7 @@ class RTDetrPreTrainedModel(PreTrainedModel):
     base_model_prefix = "rt_detr"
     main_input_name = "pixel_values"
     _no_split_modules = [r"RTDetrConvEncoder", r"RTDetrEncoderLayer", r"RTDetrDecoderLayer"]
+    _supports_sdpa = True
 
     def _init_weights(self, module):
         """Initalize the weights"""
@@ -1299,14 +1366,14 @@ class RTDetrHybridEncoder(nn.Module):
             self.pan_blocks.append(RTDetrCSPRepLayer(config))
 
     @staticmethod
-    def build_2d_sincos_position_embedding(width, height, embed_dim=256, temperature=10000.0):
-        grid_w = torch.arange(int(width), dtype=torch.float32)
-        grid_h = torch.arange(int(height), dtype=torch.float32)
+    def build_2d_sincos_position_embedding(width, height, embed_dim=256, temperature=10000.0, device="cpu"):
+        grid_w = torch.arange(int(width), dtype=torch.float32, device=device)
+        grid_h = torch.arange(int(height), dtype=torch.float32, device=device)
         grid_w, grid_h = torch.meshgrid(grid_w, grid_h, indexing="ij")
         if embed_dim % 4 != 0:
             raise ValueError("Embed dimension must be divisible by 4 for 2D sin-cos position embedding")
         pos_dim = embed_dim // 4
-        omega = torch.arange(pos_dim, dtype=torch.float32) / pos_dim
+        omega = torch.arange(pos_dim, dtype=torch.float32, device=device) / pos_dim
         omega = 1.0 / (temperature**omega)
 
         out_w = grid_w.flatten()[..., None] @ omega[None]
@@ -1372,7 +1439,11 @@ class RTDetrHybridEncoder(nn.Module):
                 src_flatten = hidden_states[enc_ind].flatten(2).permute(0, 2, 1)
                 if self.training or self.eval_size is None:
                     pos_embed = self.build_2d_sincos_position_embedding(
-                        width, height, self.encoder_hidden_dim, self.positional_encoding_temperature
+                        width,
+                        height,
+                        self.encoder_hidden_dim,
+                        self.positional_encoding_temperature,
+                        device=src_flatten.device,
                     ).to(src_flatten.device, src_flatten.dtype)
                 else:
                     pos_embed = None
@@ -1669,8 +1740,8 @@ class RTDetrModel(RTDetrPreTrainedModel):
         for param in self.backbone.parameters():
             param.requires_grad_(True)
 
-    @lru_cache(maxsize=32)
-    def generate_anchors(self, spatial_shapes=None, grid_size=0.05):
+    # @lru_cache(maxsize=32)
+    def generate_anchors(self, spatial_shapes=None, grid_size=0.05, device="cpu"):
         # We always generate anchors in float32 to preserve equivalence between
         # dynamic and static anchor inference
         dtype = torch.float32
@@ -1683,10 +1754,12 @@ class RTDetrModel(RTDetrPreTrainedModel):
         anchors = []
         for level, (height, width) in enumerate(spatial_shapes):
             grid_y, grid_x = torch.meshgrid(
-                torch.arange(end=height, dtype=dtype), torch.arange(end=width, dtype=dtype), indexing="ij"
+                torch.arange(end=height, dtype=dtype, device=device),
+                torch.arange(end=width, dtype=dtype, device=device),
+                indexing="ij",
             )
             grid_xy = torch.stack([grid_x, grid_y], -1)
-            valid_wh = torch.tensor([width, height]).to(dtype)
+            valid_wh = torch.tensor([width, height], device=device).to(dtype)
             grid_xy = (grid_xy.unsqueeze(0) + 0.5) / valid_wh
             wh = torch.ones_like(grid_xy) * grid_size * (2.0**level)
             anchors.append(torch.concat([grid_xy, wh], -1).reshape(-1, height * width, 4))
@@ -1826,7 +1899,7 @@ class RTDetrModel(RTDetrPreTrainedModel):
             # Pass spatial_shapes as tuple to make it hashable and make sure
             # lru_cache is working for generate_anchors()
             spatial_shapes_tuple = tuple(spatial_shapes_list)
-            anchors, valid_mask = self.generate_anchors(spatial_shapes_tuple)
+            anchors, valid_mask = self.generate_anchors(spatial_shapes_tuple, device=device)
         else:
             anchors, valid_mask = self.anchors, self.valid_mask
 
