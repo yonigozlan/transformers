@@ -737,7 +737,7 @@ def multi_scale_deformable_attention(
 ) -> Tensor:
     batch_size, _, num_heads, hidden_dim = value.shape
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
-    value_list = value.split([height.item() * width.item() for height, width in value_spatial_shapes], dim=1)
+    value_list = value.split([height * width for height, width in value_spatial_shapes], dim=1)
     sampling_grids = 2 * sampling_locations - 1
     sampling_value_list = []
     for level_id, (height, width) in enumerate(value_spatial_shapes):
@@ -849,6 +849,7 @@ class RTDetrMultiscaleDeformableAttention(nn.Module):
         position_embeddings: Optional[torch.Tensor] = None,
         reference_points=None,
         spatial_shapes=None,
+        spatial_shapes_list=None,
         level_start_index=None,
         output_attentions: bool = False,
     ):
@@ -895,7 +896,9 @@ class RTDetrMultiscaleDeformableAttention(nn.Module):
 
         if self.disable_custom_kernels:
             # PyTorch implementation
-            output = multi_scale_deformable_attention(value, spatial_shapes, sampling_locations, attention_weights)
+            output = multi_scale_deformable_attention(
+                value, spatial_shapes_list, sampling_locations, attention_weights
+            )
         else:
             try:
                 # custom kernel
@@ -1130,6 +1133,7 @@ class RTDetrDecoderLayer(nn.Module):
         position_embeddings: Optional[torch.Tensor] = None,
         reference_points=None,
         spatial_shapes=None,
+        spatial_shapes_list=None,
         level_start_index=None,
         encoder_hidden_states: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
@@ -1180,6 +1184,7 @@ class RTDetrDecoderLayer(nn.Module):
             position_embeddings=position_embeddings,
             reference_points=reference_points,
             spatial_shapes=spatial_shapes,
+            spatial_shapes_list=spatial_shapes_list,
             level_start_index=level_start_index,
             output_attentions=output_attentions,
         )
@@ -1367,13 +1372,13 @@ class RTDetrHybridEncoder(nn.Module):
 
     @staticmethod
     def build_2d_sincos_position_embedding(width, height, embed_dim=256, temperature=10000.0, device="cpu"):
-        grid_w = torch.arange(int(width), dtype=torch.float32, device=device)
-        grid_h = torch.arange(int(height), dtype=torch.float32, device=device)
+        grid_w = torch.arange(int(width), dtype=torch.float16, device=device)
+        grid_h = torch.arange(int(height), dtype=torch.float16, device=device)
         grid_w, grid_h = torch.meshgrid(grid_w, grid_h, indexing="ij")
         if embed_dim % 4 != 0:
             raise ValueError("Embed dimension must be divisible by 4 for 2D sin-cos position embedding")
         pos_dim = embed_dim // 4
-        omega = torch.arange(pos_dim, dtype=torch.float32, device=device) / pos_dim
+        omega = torch.arange(pos_dim, dtype=torch.float16, device=device) / pos_dim
         omega = 1.0 / (temperature**omega)
 
         out_w = grid_w.flatten()[..., None] @ omega[None]
@@ -1512,6 +1517,7 @@ class RTDetrDecoder(RTDetrPreTrainedModel):
         position_embeddings=None,
         reference_points=None,
         spatial_shapes=None,
+        spatial_shapes_list=None,
         level_start_index=None,
         valid_ratios=None,
         output_attentions=None,
@@ -1583,6 +1589,7 @@ class RTDetrDecoder(RTDetrPreTrainedModel):
                 encoder_hidden_states=encoder_hidden_states,
                 reference_points=reference_points_input,
                 spatial_shapes=spatial_shapes,
+                spatial_shapes_list=spatial_shapes_list,
                 level_start_index=level_start_index,
                 encoder_attention_mask=encoder_attention_mask,
                 output_attentions=output_attentions,
@@ -1744,7 +1751,7 @@ class RTDetrModel(RTDetrPreTrainedModel):
     def generate_anchors(self, spatial_shapes=None, grid_size=0.05, device="cpu"):
         # We always generate anchors in float32 to preserve equivalence between
         # dynamic and static anchor inference
-        dtype = torch.float32
+        dtype = torch.float16
 
         if spatial_shapes is None:
             spatial_shapes = [
@@ -1946,6 +1953,7 @@ class RTDetrModel(RTDetrPreTrainedModel):
             encoder_attention_mask=attention_mask,
             reference_points=init_reference_points,
             spatial_shapes=spatial_shapes,
+            spatial_shapes_list=spatial_shapes_list,
             level_start_index=level_start_index,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
