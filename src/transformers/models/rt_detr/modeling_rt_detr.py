@@ -18,7 +18,7 @@ import math
 import os
 import warnings
 from dataclasses import dataclass
-from functools import partial
+from functools import lru_cache, partial, wraps
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -1371,14 +1371,16 @@ class RTDetrHybridEncoder(nn.Module):
             self.pan_blocks.append(RTDetrCSPRepLayer(config))
 
     @staticmethod
-    def build_2d_sincos_position_embedding(width, height, embed_dim=256, temperature=10000.0, device="cpu"):
-        grid_w = torch.arange(int(width), dtype=torch.float16, device=device)
-        grid_h = torch.arange(int(height), dtype=torch.float16, device=device)
+    def build_2d_sincos_position_embedding(
+        width, height, embed_dim=256, temperature=10000.0, device="cpu", dtype=torch.float32
+    ):
+        grid_w = torch.arange(int(width), dtype=dtype, device=device)
+        grid_h = torch.arange(int(height), dtype=dtype, device=device)
         grid_w, grid_h = torch.meshgrid(grid_w, grid_h, indexing="ij")
         if embed_dim % 4 != 0:
             raise ValueError("Embed dimension must be divisible by 4 for 2D sin-cos position embedding")
         pos_dim = embed_dim // 4
-        omega = torch.arange(pos_dim, dtype=torch.float16, device=device) / pos_dim
+        omega = torch.arange(pos_dim, dtype=dtype, device=device) / pos_dim
         omega = 1.0 / (temperature**omega)
 
         out_w = grid_w.flatten()[..., None] @ omega[None]
@@ -1449,6 +1451,7 @@ class RTDetrHybridEncoder(nn.Module):
                         self.encoder_hidden_dim,
                         self.positional_encoding_temperature,
                         device=src_flatten.device,
+                        dtype=src_flatten.dtype,
                     ).to(src_flatten.device, src_flatten.dtype)
                 else:
                     pos_embed = None
@@ -1653,6 +1656,23 @@ class RTDetrDecoder(RTDetrPreTrainedModel):
         )
 
 
+def conditional_lru_cache(*lru_args, **lru_kwargs):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            if not torch.compiler.is_compiling():
+                # Cache the function only if the model is not being compiled
+                cached_func = lru_cache(*lru_args, **lru_kwargs)(func.__get__(self, type(self)))
+                return cached_func(*args, **kwargs)
+            else:
+                # Otherwise, just call the original function
+                return func(self, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 @add_start_docstrings(
     """
     RT-DETR Model (consisting of a backbone and encoder-decoder) outputting raw hidden states without any head on top.
@@ -1704,7 +1724,7 @@ class RTDetrModel(RTDetrPreTrainedModel):
 
         # init encoder output anchors and valid_mask
         if config.anchor_image_size:
-            self.anchors, self.valid_mask = self.generate_anchors()
+            self.anchors, self.valid_mask = self.generate_anchors(dtype=self.dtype)
 
         # Create decoder input projection layers
         # https://github.com/lyuwenyu/RT-DETR/blob/94f5e16708329d2f2716426868ec89aa774af016/rtdetr_pytorch/src/zoo/rtdetr/rtdetr_decoder.py#L412
@@ -1747,12 +1767,8 @@ class RTDetrModel(RTDetrPreTrainedModel):
         for param in self.backbone.parameters():
             param.requires_grad_(True)
 
-    # @lru_cache(maxsize=32)
-    def generate_anchors(self, spatial_shapes=None, grid_size=0.05, device="cpu"):
-        # We always generate anchors in float32 to preserve equivalence between
-        # dynamic and static anchor inference
-        dtype = torch.float16
-
+    @conditional_lru_cache(maxsize=32)
+    def generate_anchors(self, spatial_shapes=None, grid_size=0.05, device="cpu", dtype=torch.float32):
         if spatial_shapes is None:
             spatial_shapes = [
                 [int(self.config.anchor_image_size[0] / s), int(self.config.anchor_image_size[1] / s)]
@@ -1906,7 +1922,7 @@ class RTDetrModel(RTDetrPreTrainedModel):
             # Pass spatial_shapes as tuple to make it hashable and make sure
             # lru_cache is working for generate_anchors()
             spatial_shapes_tuple = tuple(spatial_shapes_list)
-            anchors, valid_mask = self.generate_anchors(spatial_shapes_tuple, device=device)
+            anchors, valid_mask = self.generate_anchors(spatial_shapes_tuple, device=device, dtype=dtype)
         else:
             anchors, valid_mask = self.anchors, self.valid_mask
 
